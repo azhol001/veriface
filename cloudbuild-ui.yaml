@@ -1,0 +1,23 @@
+steps:
+  # Build UI image from ui/Dockerfile
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA', '-f', 'ui/Dockerfile', 'ui']
+
+  # Push image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA']
+
+  # Deploy to Cloud Run with API_BASE env var
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      [
+        'run','deploy','veriface-ui',
+        '--image','us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA',
+        '--region','us-central1',
+        '--allow-unauthenticated',
+        '--set-env-vars','API_BASE=https://veriface-api-2r6izsajpa-uc.a.run.app'
+      ]
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA'
