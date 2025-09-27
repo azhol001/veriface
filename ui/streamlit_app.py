@@ -1,13 +1,26 @@
 import os, json, time, requests
 import streamlit as st
 
-# ------------ Config ------------
+# ---------- Config ----------
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")   # change if your FastAPI runs elsewhere
 API_URL_DEFAULT = f"{API_BASE}/analyze"
 
 st.set_page_config(page_title="VeriFace — Deepfake Intrusion Alarm", layout="centered")
 
-# ------------ Header ------------
+# ---------- Light design ----------
+st.markdown("""
+<style>
+/* nicer table + paddings */
+.block-container { padding-top: 2rem; padding-bottom: 2rem; }
+.dataframe td, .dataframe th { font-size: 0.95rem; }
+.badge { padding: .35rem .6rem; border-radius: .5rem; font-weight: 600; }
+.badge-ok { background: #1b5e20; color: #fff; }
+.badge-warn { background: #ff8f00; color: #111; }
+.badge-err { background: #b71c1c; color: #fff; }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------- Header ----------
 st.title("🔎 VeriFace — Deepfake Intrusion Alarm")
 st.caption("Upload a short clip. We flag where it looks fake and explain why.")
 
@@ -16,7 +29,7 @@ with st.sidebar:
     st.text_input("API endpoint", value=API_URL_DEFAULT, key="api_url")
     st.markdown("Detectors used: **LipSync, Blink, Voice**")
 
-# ------------ Helpers ------------
+# ---------- Helpers ----------
 def fmt_s(x, nd=2):
     try:
         return f"{float(x):.{nd}f}"
@@ -35,16 +48,15 @@ def short_reason(text: str) -> str:
         return "🎤 Voice artifact — robotic/flat audio patterns"
     return text
 
-def overall_verdict(summary, timeline):
-    spans = int(summary.get("total_spans", 0) or 0)
-    flagged = set(summary.get("sources_flagged", []))
-    if spans == 0:
-        return ("Likely real-ish", "No suspicious segments found by our lightweight checks.", "success")
-    if len(flagged) >= 2 or spans >= 3:
-        return ("⚠️ Likely deepfake", "Multiple detectors fired and several segments look suspicious.", "error")
-    return ("🤔 Inconclusive", "Some signals look odd, but evidence is limited.", "warning")
+def verdict_from_counts(flagged_detectors, detector_spans_total):
+    # simple, judge-friendly rule
+    if detector_spans_total == 0:
+        return ("Likely real-ish", "No suspicious segments found by our lightweight checks.", "ok")
+    if len(flagged_detectors) >= 2 or detector_spans_total >= 3:
+        return ("⚠️ Likely deepfake", "Multiple detectors fired and several segments look suspicious.", "err")
+    return ("🤔 Inconclusive", "Some signals look odd, but evidence is limited.", "warn")
 
-# ------------ UI: Upload ------------
+# ---------- Upload ----------
 uploaded = st.file_uploader(
     "Upload video/audio (mp4/mov/mkv/webm/wav/mp3)",
     type=["mp4","mov","mkv","webm","wav","mp3"]
@@ -68,37 +80,56 @@ if uploaded and st.button("Analyze"):
     data = r.json()
     st.success(f"Done in {took:.1f}s")
 
-    # ---------- Summary + Verdict ----------
-    s = data.get("summary", {})
-    timeline = data.get("timeline", [])
+    # ---------- Extract ----------
+    s = data.get("summary", {}) or {}
+    timeline = data.get("timeline", []) or []
+    pa = data.get("per_agent", {}) or {}
 
-    verdict_title, verdict_reason, verdict_kind = overall_verdict(s, timeline)
-    if verdict_kind == "success":
-        st.success(f"Verdict: {verdict_title} — {verdict_reason}")
-    elif verdict_kind == "warning":
-        st.warning(f"Verdict: {verdict_title} — {verdict_reason}")
+    # Compute counts directly from per-detector results so numbers match what you see
+    detectors = ["lipsync", "blink", "voice"]
+    flagged = []
+    detector_spans_total = 0
+    for d in detectors:
+        spans = (pa.get(d, {}) or {}).get("spans", []) or []
+        if len(spans) > 0:
+            flagged.append(d)
+        detector_spans_total += len(spans)
+
+    # verdict
+    ver_title, ver_reason, ver_kind = verdict_from_counts(flagged, detector_spans_total)
+    if ver_kind == "ok":
+        st.markdown(f'<span class="badge badge-ok">Verdict: {ver_title}</span> &nbsp; {ver_reason}', unsafe_allow_html=True)
+    elif ver_kind == "warn":
+        st.markdown(f'<span class="badge badge-warn">Verdict: {ver_title}</span> &nbsp; {ver_reason}', unsafe_allow_html=True)
     else:
-        st.error(f"Verdict: {verdict_title} — {verdict_reason}")
+        st.markdown(f'<span class="badge badge-err">Verdict: {ver_title}</span> &nbsp; {ver_reason}', unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    # ---------- Metrics (clear & consistent) ----------
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
         st.metric("🎬 Clip length (s)", fmt_s(s.get("clip_seconds", 0), 1))
-    with col2:
-        flags = ", ".join(s.get("sources_flagged", [])) or "none"
-        st.metric("🧭 Detectors triggered", flags)
-    with col3:
-        st.metric("🚨 Suspicious spans", s.get("total_spans", 0))
+    with c2:
+        st.metric("🧭 Detectors triggered", ", ".join(flagged) or "none")
+    with c3:
+        st.metric("🧩 Detector spans (total)", detector_spans_total)  # ← now shows 5 for 4 lipsync + 1 blink
+    with c4:
+        st.metric("🕒 Timeline windows", len(timeline))  # can differ if the backend merges spans
 
-    # ---------- Human reasons (top 3) ----------
+    # ---------- Why (top 3) ----------
     st.subheader("Why we think so")
-    if timeline:
-        top3 = timeline[:3]
-        for i, span in enumerate(top3, 1):
-            st.write(f"**{i}. {fmt_s(span.get('start',0))}s → {fmt_s(span.get('end',0))}s** — {short_reason(span.get('reason',''))}")
+    if detector_spans_total > 0:
+        # build from detectors (more granular than timeline)
+        reasons = []
+        for d in detectors:
+            for sp in (pa.get(d, {}) or {}).get("spans", []) or []:
+                reasons.append((sp.get("start", 0), sp.get("end", 0), short_reason(sp.get("reason", ""))))
+        reasons.sort(key=lambda x: x[0])
+        for i, (stt, endt, why) in enumerate(reasons[:3], 1):
+            st.write(f"**{i}. {fmt_s(stt)}s → {fmt_s(endt)}s** — {why}")
     else:
         st.write("No suspicious segments reported by detectors.")
 
-    # ---------- Timeline table ----------
+    # ---------- Timeline (from backend merge) ----------
     st.subheader("Suspicious Timeline")
     if timeline:
         rows = []
@@ -110,34 +141,32 @@ if uploaded and st.button("Analyze"):
                 "Why": short_reason(span.get("reason", "")),
             })
         st.dataframe(rows, use_container_width=True)
-        st.caption("Tip: Click a row to discuss that spot; judges can skim quickly.")
+        st.caption("Note: Timeline windows may merge close spans for easier review.")
     else:
         st.success("✅ No suspicious spans detected.")
 
-    # ---------- Per-detector (no nested expanders) ----------
+    # ---------- Per-detector (unique toggle keys; no nesting) ----------
     st.subheader("Per-Detector Results")
-    pa = data.get("per_agent", {})
-    for detector in ["lipsync", "blink", "voice"]:
-        block = pa.get(detector, {}) or {}
+    for d in detectors:
+        block = pa.get(d, {}) or {}
         spans = block.get("spans", []) or []
-        exp = st.expander(f"{detector.title()} — {len(spans)} span(s)")
-        with exp:
+        with st.expander(f"{d.title()} — {len(spans)} span(s)"):
             if spans:
                 nice = []
-                for sspan in spans:
+                for sp in spans:
                     nice.append({
-                        "Start (s)": fmt_s(sspan.get("start", 0)),
-                        "End (s)": fmt_s(sspan.get("end", 0)),
-                        "Why": short_reason(sspan.get("reason", "")),
+                        "Start (s)": fmt_s(sp.get("start", 0)),
+                        "End (s)": fmt_s(sp.get("end", 0)),
+                        "Why": short_reason(sp.get("reason", "")),
                     })
                 st.dataframe(nice, use_container_width=True)
             else:
                 st.write("Nothing suspicious here. ✅")
 
-            # Show raw technical details under a *separate* toggle (not an expander inside an expander)
+            # FIX: unique key to avoid DuplicateWidgetID
             det = block.get("details", {})
             if det:
-                show_details = st.toggle("Show technical details", value=False)
+                show_details = st.toggle(f"Show technical details ({d})", value=False, key=f"details_{d}")
                 if show_details:
                     st.json(det)
 
@@ -149,7 +178,6 @@ if uploaded and st.button("Analyze"):
         mime="application/json"
     )
 
-# Always-on legend
+# Legend
 st.caption("Legend: 👄 Lip-sync • 👁 Blink • 🎤 Voice")
-
 
