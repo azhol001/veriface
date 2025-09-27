@@ -1,0 +1,14 @@
+google-adk==0.2.*
+opencv-python==4.*
+mediapipe==0.10.*
+librosa==0.10.*
+soundfile==0.12.*
+scikit-learn==1.5.*
+fastapi==0.115.*
+uvicorn[standard]>=0.34,<0.38
+python-multipart==0.0.9
+pydantic==2.*
+streamlit==1.37.*
+numpy==1.26.*
+ffmpeg-python==0.2.*
+moviepy==1.0.*
