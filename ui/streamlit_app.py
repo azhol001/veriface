@@ -6,6 +6,15 @@ API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8080")
 st.set_page_config(page_title="VeriFace — Deepfake Intrusion Alarm", layout="centered")
 st.title("VeriFace — Deepfake Intrusion Alarm (DIA)")
 st.caption("Upload a short clip. Three detectors run; coordinator fuses results into a timeline.")
+with st.expander("ℹ️ How VeriFace works", expanded=False):
+    st.markdown("""
+**Three analyzers run in parallel:**
+- **LipSync** — compares mouth motion vs audio energy; flags low correlation or large lag.
+- **Blink** — detects unusually long no-blink spans (robotic / no-blink behavior).
+- **Voice** — finds audio anomalies using MFCC + IsolationForest.
+
+**Coordinator** merges timestamps, removes duplicates, and explains *why* each segment looks suspicious.
+    """)
 
 api_url = f"{API_BASE}/analyze"
 
@@ -68,3 +77,4 @@ if uploaded and st.button("Analyze"):
             if det:
                 with st.expander("Details"):
                     st.json(det)
+
