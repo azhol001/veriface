@@ -1,27 +1,3 @@
 steps:
-  # Build API image from root Dockerfile
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$SHORT_SHA', '.']
-
-  # Push image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$SHORT_SHA']
-
-  # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      [
-        'run','deploy','veriface-api',
-        '--image','us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$SHORT_SHA',
-        '--region','us-central1',
-        '--allow-unauthenticated',
-        '--memory','2Gi',
-        '--cpu','2',
-        '--concurrency','1',
-        '--timeout','900',
-        '--min-instances','1'
-      ]
-
-images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$SHORT_SHA'
+- name: 'ubuntu'
+  args: ['echo', 'Hello from minimal Cloud Build!']
