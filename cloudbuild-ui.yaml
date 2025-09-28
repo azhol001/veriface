@@ -1,26 +1,23 @@
-# Builds UI container, pushes to Artifact Registry, deploys to Cloud Run.
-# It discovers the current API URL and injects it as API_BASE_URL.
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA", "-f", "ui/Dockerfile", "."]
+  args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA", "-f", "api/Dockerfile", "."]
 - name: gcr.io/cloud-builders/docker
-  args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA"]
+  args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA"]
 - name: gcr.io/google.com/cloudsdktool/cloud-sdk
   entrypoint: bash
   args:
   - -c
   - |
-    API_URL=$(gcloud run services describe veriface-api --region us-central1 --format='value(status.url)')
-    echo "Using API URL: $API_URL"
-    gcloud run deploy veriface-ui \
-      --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA \
+    gcloud run deploy veriface-api \
+      --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA \
       --region us-central1 \
       --platform managed \
       --allow-unauthenticated \
       --service-account veriface-runner@${PROJECT_ID}.iam.gserviceaccount.com \
       --port 8080 \
-      --set-env-vars API_BASE_URL=$API_URL,UI_BUILD_SHA=$COMMIT_SHA \
       --memory 1Gi \
       --cpu 2
 images:
-- us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA
+- us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
+options:
+  logging: CLOUD_LOGGING_ONLY
