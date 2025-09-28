@@ -1,13 +1,5 @@
 # adk_project/agents/lipsync_agent/agent.py
 # LipSync Agent (conservative + talk-gated + lag-comp + dynamic threshold)
-# Compares mouth-open signal to the audio RMS envelope. We:
-#   1) Extract mouth opening series via MediaPipe Face Mesh (468 pts).
-#   2) Build an audio envelope aligned to frame times.
-#   3) Estimate best audio↔video lag and optionally shift audio.
-#   4) Compute sliding Pearson r, but only judge when the person is talking.
-#   5) Use a dynamic, per-clip low-correlation threshold to avoid false positives.
-#
-# Output: sustained low-correlation spans during speech only.
 
 from __future__ import annotations
 import json
@@ -30,7 +22,6 @@ def _euclidean(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.linalg.norm(a - b))
 
 def mouth_open_ratio(pts: np.ndarray) -> float:
-    """pts: (468,2) pixel coords -> MAR ~ vertical / horizontal"""
     v = _euclidean(pts[UP_INNER], pts[LOW_INNER])
     h = _euclidean(pts[MOUTH_L], pts[MOUTH_R]) + 1e-6
     return v / h
@@ -50,7 +41,7 @@ def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray
     have_face = 0
     for f in frames:
         h, w = f.shape[:2]
-        res = fm.process(f)
+        res = fm.process(f)  # frames should be RGB from loader
         if not res.multi_face_landmarks:
             raw.append(np.nan)
             continue
@@ -62,7 +53,7 @@ def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray
 
     face_coverage = float(have_face) / float(len(frames) or 1)
 
-    # Fill NaNs conservatively: forward-fill with median fallback
+    # Fill NaNs conservatively: forward fill with median fallback
     arr = np.array(raw, dtype=np.float32)
     if np.isnan(arr).any():
         isn = np.isnan(arr)
@@ -81,19 +72,15 @@ def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray
 
 def audio_envelope(y: np.ndarray, sr: int, frame_times_s: List[float]) -> Tuple[np.ndarray, float]:
     """Compute RMS envelope aligned to video frames; returns (env_z, avg_rms)."""
-    hop = max(1, int(sr / 50))                        # ~20 ms
-    win = max(hop * 2, int(0.04 * sr))                # >=40 ms
-    rms = librosa.feature.rms(y=y, frame_length=win, hop_length=hop)[0]  # (T,)
+    hop = max(1, int(sr / 50))              # ~20 ms
+    win = max(hop * 2, int(0.04 * sr))      # >=40 ms
+    rms = librosa.feature.rms(y=y, frame_length=win, hop_length=hop)[0] if len(y) else np.zeros(1)
     avg_rms = float(np.mean(rms)) if rms.size else 0.0
     t_env = np.arange(len(rms)) * (hop / sr)
 
-    # Align to frame times
-    if rms.size:
-        env = np.interp(frame_times_s, t_env, rms, left=rms[0], right=rms[-1]).astype(np.float32)
-    else:
-        env = np.zeros(len(frame_times_s), dtype=np.float32)
+    env = np.interp(frame_times_s, t_env, rms, left=rms[0], right=rms[-1]).astype(np.float32) if rms.size else \
+          np.zeros(len(frame_times_s), dtype=np.float32)
 
-    # Z-score
     mu, sd = float(env.mean()), float(env.std() + 1e-6)
     return (env - mu) / sd, avg_rms
 
@@ -139,11 +126,9 @@ def spans_from_mask(mask: np.ndarray, times: List[float], min_s: float) -> List[
     return spans
 
 def _boolean_close(mask: np.ndarray, min_len_frames: int) -> np.ndarray:
-    """Morphological close on 1D bool to bridge tiny gaps within talk."""
+    """Fill gaps shorter than min_len_frames between True-runs."""
     if min_len_frames <= 1:
         return mask
-    # close = dilate( erode(mask) ) with simple convolution trick
-    # Here, we just fill gaps smaller than min_len_frames:
     idx = np.where(mask)[0]
     if idx.size == 0:
         return mask
@@ -164,18 +149,20 @@ class LipSyncResult:
 def analyze_lipsync(
     video_path: str,
     fps: int = 25,
-    corr_win_s: float = 0.8,       # correlation window seconds
-    corr_thresh: float = 0.20,     # absolute ceiling for low-corr threshold
-    min_span_s: float = 1.00,      # require sustained issue
-    face_cov_req: float = 0.60,    # need ≥60% tracked face frames
-    weak_audio_rms: float = 0.01,  # skip if audio is ultra-quiet
-    talk_z_thresh: float = 0.40,   # how "loud" speech must be (z units)
-    talk_close_s: float = 0.25,    # close small gaps in talk mask
-    talk_cov_req: float = 0.60,    # inside a flagged span, ≥60% must be talk
-    lag_search_ms: int = 350,      # search ± this lag
-    min_useful_lag_ms: int = 80,   # only apply lag if magnitude ≥ this
-    lag_gain_thresh: float = 0.04  # only apply lag if mean r improves by ≥ this
+    # safer defaults
+    corr_win_s: float = 0.9,        # a bit longer window for stability
+    corr_thresh: float = 0.18,      # absolute ceiling; dynamic will lower but not below 0.12
+    min_span_s: float = 1.20,       # require longer sustained issue
+    face_cov_req: float = 0.60,     # need ≥60% tracked face frames
+    weak_audio_rms: float = 0.012,  # skip if audio is very quiet
+    talk_z_thresh: float = 0.50,    # speech gate is slightly stricter
+    talk_close_s: float = 0.25,
+    talk_cov_req: float = 0.70,     # inside a flagged span, ≥70% must be talk
+    lag_search_ms: int = 350,
+    min_useful_lag_ms: int = 80,
+    lag_gain_thresh: float = 0.05   # only accept lag if r improves enough
 ) -> LipSyncResult:
+
     # ---- video → mouth series ----
     frames, frame_times, vid_dur = load_video_frames(video_path, fps=fps)
     mouth, _, face_cov = extract_mouth_series(frames, fps=fps)
@@ -220,28 +207,36 @@ def analyze_lipsync(
         )
 
     # ---- talk mask (gate evaluation to speech segments) ----
-    # Smooth env a bit (reduce "breathing" in/out of talk)
     env_s = _moving_avg(env_z, max(3, int(0.10 * fps)))
     talk_mask = env_s > talk_z_thresh
     talk_mask = _boolean_close(talk_mask, min_len_frames=max(2, int(talk_close_s * fps)))
     talk_fraction = float(np.mean(talk_mask)) if talk_mask.size else 0.0
 
+    # If almost no talk, don't judge
+    if talk_fraction < 0.20:
+        return LipSyncResult(
+            suspicious_spans=[],
+            details={
+                "video_duration_s": float(vid_dur),
+                "fps": int(fps),
+                "face_coverage": round(float(face_cov), 3),
+                "note": f"insufficient speech (talk_fraction={talk_fraction:.2f})",
+            },
+        )
+
     # ---- sliding correlation ----
-    win = max(5, int(corr_win_s * fps))  # correlation window frames
+    win = max(5, int(corr_win_s * fps))
     r_raw = sliding_corr(mouth, env_z, win=win)
 
     # ---- lag search (±lag_search_ms), accept only if it measurably helps ----
     lags = np.arange(-(len(mouth) - 1), len(mouth))
-    # Cross-correlation of full signals
     xcorr = np.correlate(mouth, env_z, mode="full")
     max_lag_frames = max(1, int((lag_search_ms / 1000.0) * fps))
     m = (lags >= -max_lag_frames) & (lags <= max_lag_frames)
     best_lag_frames = int(lags[m][np.argmax(xcorr[m])]) if np.any(m) else 0
     lag_ms = float(best_lag_frames * 1000.0 / fps)
 
-    # Build lag-compensated envelope if helpful
     def _shift_env(env: np.ndarray, lag_frames: int) -> np.ndarray:
-        # Interpolate env over shifted times: env(t - lag)
         dt = 1.0 / float(fps)
         shifted = np.interp(
             np.arange(len(env)) * dt,
@@ -263,22 +258,40 @@ def analyze_lipsync(
             env_aligned = env_try
             r_raw = r_try
             used_lag = True
-        # keep lag_ms as measured even if not applied
 
     mean_corr_aligned = float(np.nanmean(r_raw))
 
-    # ---- dynamic threshold (relative to clip's talk baseline) ----
+    # ---- dynamic threshold relative to talk baseline ----
     r_on_talk = r_raw[talk_mask] if r_raw.size and talk_mask.any() else np.array([], dtype=np.float32)
     if r_on_talk.size:
         p30 = float(np.percentile(r_on_talk, 30))
-        dyn_thresh = min(corr_thresh, p30 - 0.05)  # be kinder when overall correlation is low
+        dyn_thresh = min(corr_thresh, max(0.12, p30 - 0.05))  # never go below 0.12
     else:
         dyn_thresh = corr_thresh
 
+    # If overall aligned correlation is already healthy, don't accuse
+    if mean_corr_aligned >= 0.22:
+        return LipSyncResult(
+            suspicious_spans=[],
+            details={
+                "fps": int(fps),
+                "corr_window_s": float(corr_win_s),
+                "corr_thresh": float(corr_thresh),
+                "min_span_s": float(min_span_s),
+                "face_coverage": round(float(face_cov), 3),
+                "video_duration_s": float(vid_dur),
+                "avg_audio_rms": float(round(avg_rms, 5)),
+                "lag_ms": float(round(lag_ms, 1)),
+                "used_lag_comp": bool(used_lag),
+                "mean_corr": float(round(mean_corr, 3)),
+                "mean_corr_aligned": float(round(mean_corr_aligned, 3)),
+                "talk_fraction": float(round(talk_fraction, 3)),
+                "note": "good overall correlation; skip flags",
+            },
+        )
+
     # ---- conservative flagging: only sustained low correlation during talk ----
     low_corr = (r_raw < dyn_thresh) & talk_mask
-
-    # optional smoothing of low_corr mask (bridge tiny gaps)
     if low_corr.any():
         low_corr = _boolean_close(low_corr, min_len_frames=max(2, int(0.20 * fps)))
 
@@ -299,17 +312,25 @@ def analyze_lipsync(
         for (s, e) in valid_spans
     ]
 
+    # fraction of talk time that is flagged
     flagged_talk_fraction = 0.0
-    if valid_spans and talk_mask.any():
-        # fraction of talk time that is flagged
-        talk_dt = 1.0 / float(fps)
-        total_talk_secs = float(np.sum(talk_mask)) * talk_dt
-        # build a per-frame flagged mask
-        flagged_mask = np.zeros_like(talk_mask, dtype=bool)
-        for s, e in valid_spans:
-            idx = (np.array(frame_times) >= s) & (np.array(frame_times) <= e)
-            flagged_mask[idx] = True
-        flagged_talk_fraction = float(np.sum(flagged_mask & talk_mask) * talk_dt / (total_talk_secs + 1e-6))
+    total_talk_secs = 0.0
+    if talk_mask.any():
+        dt = 1.0 / float(fps)
+        total_talk_secs = float(np.sum(talk_mask)) * dt
+        if valid_spans:
+            flagged_mask = np.zeros_like(talk_mask, dtype=bool)
+            ft = np.array(frame_times)
+            for s, e in valid_spans:
+                idx = (ft >= s) & (ft <= e)
+                flagged_mask[idx] = True
+            flagged_talk_fraction = float(np.sum(flagged_mask & talk_mask) * dt / (total_talk_secs + 1e-6))
+
+    # Final conservative gate: require meaningful flagged talk coverage
+    min_flag_secs = max(1.6, 0.10 * total_talk_secs)  # ≥1.6s or 10% of talk, whichever larger
+    total_flag_secs = sum(e - s for (s, e) in valid_spans)
+    if total_flag_secs < min_flag_secs:
+        out_spans = []  # not enough sustained evidence
 
     details = {
         "fps": int(fps),
@@ -325,18 +346,21 @@ def analyze_lipsync(
         "mean_corr_aligned": float(round(mean_corr_aligned, 3)),
         "talk_fraction": float(round(talk_fraction, 3)),
         "flagged_talk_fraction": float(round(flagged_talk_fraction, 3)),
+        "min_flag_secs": float(round(min_flag_secs, 2)),
+        "total_flag_secs": float(round(total_flag_secs, 2)),
+        "dyn_thresh_final": float(round(dyn_thresh, 2)),
     }
     return LipSyncResult(suspicious_spans=out_spans, details=details)
 
 # ---------------- CLI ----------------
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="LipSync Agent (talk-gated, lag-comp, dynamic)")
+    p = argparse.ArgumentParser(description="LipSync Agent (talk-gated, lag-comp, dynamic, conservative)")
     p.add_argument("--in", dest="inp", required=True, help="Path to video (mp4)")
     p.add_argument("--fps", type=int, default=25)
-    p.add_argument("--win", type=float, default=0.8, help="Correlation window seconds")
-    p.add_argument("--rmin", type=float, default=0.20, help="Low-corr ceiling (dynamic may go lower)")
-    p.add_argument("--minspan", type=float, default=1.0, help="Min suspicious span seconds")
+    p.add_argument("--win", type=float, default=0.9, help="Correlation window seconds")
+    p.add_argument("--rmin", type=float, default=0.18, help="Low-corr ceiling (dynamic may go lower, not below 0.12)")
+    p.add_argument("--minspan", type=float, default=1.2, help="Min suspicious span seconds")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
 
@@ -354,3 +378,5 @@ if __name__ == "__main__":
     else:
         print("✅ LipSync Agent")
         print(json.dumps(payload, indent=2))
+
+
