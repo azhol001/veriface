@@ -22,5 +22,9 @@ COPY api /app/api
 # If your repo has this folder, the next line MUST be present:
 COPY adk_project /app/adk_project
 
+# debug: list contents during build (remove later)
+RUN ls -la /app && ls -la /app/adk_project
+
 EXPOSE 8080
 CMD ["uvicorn","api.main:app","--host","0.0.0.0","--port","8080"]
+
