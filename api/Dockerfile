@@ -1,20 +1,33 @@
-FROM python:3.12-slim
+# veriface/api/Dockerfile
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ---- System deps often needed for media/CV/audio pipelines ----
+# - ffmpeg: video/audio decoding
+# - libgl1: OpenCV headless needs an OpenGL runtime
+# - libsndfile1: common for audio libs (soundfile/torchaudio)
+# - git: some ADK models/tools may pip-install from git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libgl1 libsndfile1 git \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# minimal deps for streamlit + requests
-RUN pip install --no-cache-dir streamlit==1.37.* requests==2.*
+# Install Python deps first to leverage layer caching
+COPY api/requirements.txt .
+RUN pip install -r requirements.txt
 
-# copy just the UI code
-COPY streamlit_app.py /app/ui/streamlit_app.py
+# Copy app code
+COPY api /app/api
 
-# Cloud Run listens on $PORT; Streamlit must bind to 0.0.0.0 and that port
-ENV PORT=8080
-ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+# (Optional) If your ADK code lives outside /api, bring it in here:
+# COPY adk_project /app/adk_project
 
-# Default API_BASE; will override at deploy
-ENV API_BASE="http://127.0.0.1:8080"
-
+# Health & runtime
 EXPOSE 8080
 
-CMD ["streamlit", "run", "/app/ui/streamlit_app.py", "--server.port=8080", "--server.address=0.0.0.0"]
+# Uvicorn FastAPI entrypoint
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]
