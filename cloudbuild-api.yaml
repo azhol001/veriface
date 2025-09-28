@@ -1,25 +1,22 @@
+# Builds API container, pushes to Artifact Registry, deploys to Cloud Run
 steps:
- - name: gcr.io/cloud-builders/docker
- args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA", "-f", "api/Dockerfile", "."]
- - name: gcr.io/cloud-builders/docker
- args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA"]
- - name: gcr.io/google.com/cloudsdktool/cloud-sdk
- entrypoint: bash
- args:
- - -c
- - |
- gcloud run deploy veriface-api \
- --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA \
- --region us-central1 \
- --platform managed \
- --allow-unauthenticated \
- --service-account veriface-runner@${PROJECT_ID}.iam.gserviceaccount.com \
- --port 8080 \
- --memory 1Gi \
- --cpu 2
-substitutions:
- _REGION: us-central1
+- name: gcr.io/cloud-builders/docker
+  args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA", "-f", "api/Dockerfile", "."]
+- name: gcr.io/cloud-builders/docker
+  args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA"]
+- name: gcr.io/google.com/cloudsdktool/cloud-sdk
+  entrypoint: bash
+  args:
+  - -c
+  - |
+    gcloud run deploy veriface-api \
+      --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA \
+      --region us-central1 \
+      --platform managed \
+      --allow-unauthenticated \
+      --service-account veriface-runner@${PROJECT_ID}.iam.gserviceaccount.com \
+      --port 8080 \
+      --memory 1Gi \
+      --cpu 2
 images:
- - us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
-
-
+- us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
