@@ -1,4 +1,101 @@
+# ui/pages/4_Contact.py
 import streamlit as st
-st.set_page_config(page_title="Contact • VeriFace")
-st.title("Contact")
-st.write("Email: DECOY-team@veriface.dev\n\nGitHub: https://github.com/azhol001/veriface")
+
+st.set_page_config(page_title="Contact • VeriFace", layout="wide")
+
+# ---------- THEME ----------
+st.markdown("""
+<style>
+.stApp {
+  background: radial-gradient(1200px 600px at 85% 20%, rgba(92,61,255,0.25), rgba(0,0,0,0)),
+              radial-gradient(900px 500px at 10% 10%, rgba(0,135,255,0.18), rgba(0,0,0,0)),
+              #0B1020;
+  color: #E6E8F0;
+}
+.block-container{ max-width: 1100px; padding-top: 2.2rem; }
+
+/* Title */
+.contact-title{
+  font-size: 3.0rem; font-weight: 800; line-height: 1.1;
+  text-align: center; margin: 0 0 .5rem 0;
+}
+.contact-sub{
+  text-align:center; color:#B6BCD1; margin-bottom: 2rem;
+}
+
+/* Cards */
+.card {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+  border-radius: 16px;
+  padding: 18px 18px;
+}
+
+/* Inputs */
+textarea, input, select { color:#0B1020; }
+.stTextInput>div>div>input,
+.stTextArea textarea, .stSelectbox div[data-baseweb="select"] { 
+  background: rgba(255,255,255,0.95);
+  border-radius: 10px;
+}
+
+/* Submit button */
+.btn button{
+  background: linear-gradient(90deg,#7C5CFF,#6E40FF);
+  border: 0; color: #fff; font-weight: 600;
+}
+.btn button:hover{ filter: brightness(1.08); }
+
+/* Icon rows */
+.info-item{ display:flex; gap:10px; align-items:center; margin:8px 0; }
+.icon{ width:22px; text-align:center; opacity:.9; }
+.muted{ color:#C9D0E3; }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("<div class='contact-title'>Contact Us</div>", unsafe_allow_html=True)
+st.markdown("<div class='contact-sub'>Have questions, feedback, or partnership inquiries? We'd love to hear from you.</div>", unsafe_allow_html=True)
+
+left, right = st.columns([1.05, 0.95])
+
+# ---------- Left: Form ----------
+with left:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    with st.form("contact_form"):
+        name = st.text_input("Name")
+        email = st.text_input("Email")
+        subject = st.selectbox("Subject", ["Support", "Feedback", "Partnership", "Press", "Other"])
+        message = st.text_area("Message", height=140)
+        st.markdown("<div class='btn'>", unsafe_allow_html=True)
+        send = st.form_submit_button("Send")
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("We typically respond within 24–48 h.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if send:
+        if name.strip() and email.strip() and message.strip():
+            # Demo-safe: just acknowledge (no external send)
+            st.success("✅ Thanks! Your message was received.")
+        else:
+            st.error("Please fill name, email, and message.")
+
+# ---------- Right: Info ----------
+with right:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("### Contact Information")
+    st.markdown("""
+<div class='info-item'><div class='icon'>📧</div><div>info@veriface.ai</div></div>
+<div class='info-item'><div class='icon'>📞</div><div>+1 (234) 567-890</div></div>
+<div class='info-item'><div class='icon'>📍</div><div>1234 Elm Street, Suite 567<br/>Anytown, USA</div></div>
+<br/>
+<div class='muted'>Follow us</div>
+""", unsafe_allow_html=True)
+    cols = st.columns(4)
+    with cols[0]: st.link_button("Twitter", "https://twitter.com", use_container_width=True)
+    with cols[1]: st.link_button("LinkedIn", "https://linkedin.com", use_container_width=True)
+    with cols[2]: st.link_button("GitHub", "https://github.com/azhol001/veriface", use_container_width=True)
+    with cols[3]: st.link_button("FAQ", "#", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<br/>", unsafe_allow_html=True)
+st.caption("Still need help? Check our **FAQ** page from the menu.")
