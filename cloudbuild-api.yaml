@@ -15,8 +15,9 @@ steps:
       --allow-unauthenticated \
       --service-account veriface-runner@${PROJECT_ID}.iam.gserviceaccount.com \
       --port 8080 \
-      --memory 1Gi \
-      --cpu 2
+      --memory 2Gi \
+      --cpu 2 \
+      --timeout=900
 images:
 - us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
 options:
