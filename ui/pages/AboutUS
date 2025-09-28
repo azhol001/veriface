@@ -1,5 +1,24 @@
 import streamlit as st
-st.set_page_config(page_title="About • VeriFace")
-st.title("About VeriFace")
-st.write("Coming soon. Explain your mission, team (Adil & Aykhan), and how detectors work.")
 
+st.set_page_config(page_title="About Us — VeriFace")
+
+st.title("ℹ️ About Us")
+
+st.write("""
+VeriFace is dedicated to detecting AI-generated content with precision and reliability.  
+Our mission is to empower individuals and organizations to identify deepfakes and maintain trust in digital media.
+""")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.subheader("💡 Our Mission")
+    st.write("We provide accessible tools that help users discern authentic content from manipulated media.")
+
+with col2:
+    st.subheader("📊 Our Approach")
+    st.write("We leverage state-of-the-art models and rigorous testing to ensure accurate detection results.")
+
+with col3:
+    st.subheader("🤝 Our Commitment")
+    st.write("We prioritize user privacy, data security, and continuous improvement of detection capabilities.")
