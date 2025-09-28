@@ -4,10 +4,18 @@ import streamlit as st
 import pandas as pd
 
 # ================= Config =================
-API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
-API_URL_DEFAULT = f"{API_BASE}/analyze"
-
 st.set_page_config(page_title="VeriFace — Deepfake Intrusion Alarm", layout="wide")
+
+API_BASE = os.getenv("API_BASE_URL", "").rstrip("/")
+if not API_BASE:
+    st.error("API_BASE_URL is not set on the service.")
+    st.stop()
+
+DEFAULT_ENDPOINT = f"{API_BASE}/analyze"
+
+st.sidebar.caption(f"API base: {API_BASE}")
+ui_build_sha = os.getenv("UI_BUILD_SHA", "unknown")
+st.sidebar.caption(f"UI build: {ui_build_sha}")
 
 # ================= Theme / CSS =================
 st.markdown("""
@@ -78,7 +86,7 @@ with hero_r:
 # ================= Sidebar =================
 with st.sidebar:
     st.subheader("Settings")
-    st.text_input("API endpoint", value=API_URL_DEFAULT, key="api_url")
+    st.text_input("API endpoint", value=DEFAULT_ENDPOINT, key="api_url")
     st.markdown("Detectors used: **LipSync, Blink, Voice**")
 
 # ================= Helpers =================
@@ -120,23 +128,24 @@ with up_col2:
 if uploaded and go:
     # ---- Call backend API ----
     with st.spinner("Analyzing…"):
+        endpoint = (st.session_state.get("api_url") or DEFAULT_ENDPOINT).rstrip("/")
         files = {"file": (uploaded.name, uploaded.getbuffer(), uploaded.type or "application/octet-stream")}
         t0 = time.time()
+        r = None
         try:
-            r = requests.post(st.session_state.api_url, files=files, timeout=300)
-        except Exception as e:
+            r = requests.post(endpoint, files=files, timeout=300)
+            r.raise_for_status()
+        except requests.exceptions.RequestException as e:
             st.error(f"Could not reach API: {e}")
+            if r is not None and getattr(r, "text", ""):
+                st.code(r.text)
             st.stop()
         took = time.time() - t0
 
-        if r.status_code != 200:
-            st.error(f"API error {r.status_code}: {getattr(r, 'text', r)}")
-            st.stop()
-
-        data = r.json()
+        data = r.json() if r and r.headers.get("content-type","").startswith("application/json") else {}
         st.success(f"Done in {took:.1f}s")
 
-        # ---- Extract backend fields ----
+        # ---- Extract backend fields (robust defaults) ----
         s = data.get("summary", {}) or {}
         timeline = data.get("timeline", []) or []
         pa = data.get("per_agent", {}) or {}
@@ -228,5 +237,3 @@ with c3:
     st.markdown("<div class='card'><h4>🎯 Accurate</h4><p>Conservative thresholds reduce false alarms. Clear limits shown.</p></div>", unsafe_allow_html=True)
 
 st.caption("Legend: 👄 Lip-sync • 👁 Blink • 🎤 Voice")
-
-
