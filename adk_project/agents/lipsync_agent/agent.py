@@ -1,11 +1,11 @@
 # adk_project/agents/lipsync_agent/agent.py
-# LipSync Agent (MVP): mouth-open signal from Face Mesh vs audio envelope
-# Flags spans where correlation is low or lag exceeds a threshold.
+# LipSync Agent (conservative): mouth-open signal vs audio envelope
+# Flags only sustained, confident low-correlation spans.
 
 from __future__ import annotations
 import json
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import numpy as np
 import mediapipe as mp
@@ -13,10 +13,7 @@ import librosa
 
 from adk_project.tools.media_io import load_video_frames, load_audio_mono
 
-# ---- Landmark indices (MediaPipe Face Mesh, 468 pts) ----
-# We'll compute a simple "mouth aspect ratio" (MAR):
-# vertical = distance between upper-inner (13) and lower-inner (14)
-# horizontal = distance between left (61) and right (291) mouth corners
+# ---- Mouth landmarks (MediaPipe Face Mesh, 468 pts) ----
 UP_INNER = 13
 LOW_INNER = 14
 MOUTH_L = 61
@@ -31,7 +28,8 @@ def mouth_open_ratio(pts: np.ndarray) -> float:
     h = _euclidean(pts[MOUTH_L], pts[MOUTH_R]) + 1e-6
     return v / h
 
-def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray, List[float]]:
+def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray, List[float], float]:
+    """Returns (series, frame_times, face_coverage)."""
     mp_face_mesh = mp.solutions.face_mesh
     fm = mp_face_mesh.FaceMesh(
         static_image_mode=False,
@@ -41,26 +39,28 @@ def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray
         min_tracking_confidence=0.5,
     )
 
-    series = []
+    raw = []
+    have_face = 0
     for f in frames:
         h, w = f.shape[:2]
         res = fm.process(f)
         if not res.multi_face_landmarks:
-            series.append(np.nan)
+            raw.append(np.nan)
             continue
+        have_face += 1
         face = res.multi_face_landmarks[0]
         pts = np.array([(lm.x * w, lm.y * h) for lm in face.landmark], dtype=np.float32)
-        series.append(mouth_open_ratio(pts))
+        raw.append(mouth_open_ratio(pts))
     fm.close()
 
-    times = [i / float(fps) for i in range(len(series))]
-    # fill missing with forward fill -> median
-    arr = np.array(series, dtype=np.float32)
+    face_coverage = float(have_face) / float(len(frames) or 1)
+
+    # Fill NaNs conservatively: forward-fill with median fallback
+    arr = np.array(raw, dtype=np.float32)
     if np.isnan(arr).any():
-        # simple fill: replace nans with last valid, then overall median if leading NaNs
         isn = np.isnan(arr)
         if (~isn).any():
-            last = np.nanmedian(arr)
+            last = np.nanmedian(arr[~isn])
             for i in range(len(arr)):
                 if isn[i]:
                     arr[i] = last
@@ -68,20 +68,20 @@ def extract_mouth_series(frames: List[np.ndarray], fps: int) -> Tuple[np.ndarray
                     last = arr[i]
         else:
             arr[:] = 0.0
-    return arr, times
 
-def audio_envelope(y: np.ndarray, sr: int, frame_times_s: List[float]) -> np.ndarray:
-    """Compute RMS envelope and resample to video frame times"""
-    # frame RMS with ~25 fps equivalent hop to get smooth curve
+    times = [i / float(fps) for i in range(len(arr))]
+    return arr, times, face_coverage
+
+def audio_envelope(y: np.ndarray, sr: int, frame_times_s: List[float]) -> Tuple[np.ndarray, float]:
+    """Compute RMS envelope aligned to video frames; returns (env_z, avg_rms)."""
     hop = max(1, int(sr / 50))
     win = max(hop * 2, int(0.04 * sr))
     rms = librosa.feature.rms(y=y, frame_length=win, hop_length=hop)[0]  # (T,)
+    avg_rms = float(np.mean(rms)) if rms.size else 0.0
     t_env = np.arange(len(rms)) * (hop / sr)
-    # resample envelope to frame timestamps with linear interp
-    env = np.interp(frame_times_s, t_env, rms, left=rms[0], right=rms[-1]).astype(np.float32)
-    # z-normalize
+    env = np.interp(frame_times_s, t_env, rms, left=rms[0] if rms.size else 0.0, right=rms[-1] if rms.size else 0.0).astype(np.float32)
     mu, sd = float(env.mean()), float(env.std() + 1e-6)
-    return (env - mu) / sd
+    return (env - mu) / sd, avg_rms
 
 def zscore(x: np.ndarray) -> np.ndarray:
     mu, sd = float(x.mean()), float(x.std() + 1e-6)
@@ -102,34 +102,7 @@ def sliding_corr(a: np.ndarray, b: np.ndarray, win: int) -> np.ndarray:
         out[i] = float((ra*rb).sum() / denom)
     return out
 
-def estimate_lag(a: np.ndarray, b: np.ndarray, fps: int, max_ms: int = 400) -> float:
-    """
-    Return lag in milliseconds (positive = audio leads) using full cross-correlation.
-    Uses np.correlate (length 2N-1) and searches only within ±max_ms.
-    """
-    n = len(a)
-    if n == 0 or len(b) != n:
-        return 0.0
-
-    a0 = zscore(a)
-    b0 = zscore(b)
-
-    # full cross-correlation (lags from -(n-1) .. +(n-1))
-    xcorr = np.correlate(a0, b0, mode="full")  # length 2n-1
-    lags = np.arange(-(n - 1), n)
-
-    # restrict to ±max_ms
-    max_lag_frames = max(1, int((max_ms / 1000.0) * fps))
-    m = (lags >= -max_lag_frames) & (lags <= max_lag_frames)
-
-    if not np.any(m):
-        return 0.0
-
-    best_lag = int(lags[m][np.argmax(xcorr[m])])
-    lag_ms = best_lag * 1000.0 / fps
-    return float(lag_ms)
-
-def spans_from_masks(mask: np.ndarray, times: List[float], min_s: float = 0.6) -> List[Tuple[float, float]]:
+def spans_from_mask(mask: np.ndarray, times: List[float], min_s: float) -> List[Tuple[float, float]]:
     spans = []
     start = None
     for i, flag in enumerate(mask):
@@ -150,61 +123,115 @@ def spans_from_masks(mask: np.ndarray, times: List[float], min_s: float = 0.6) -
 class LipSyncResult:
     suspicious_spans: List[dict]
     metric: str = "lipsync_corr_lag"
-    details: dict = None
+    details: Dict | None = None
 
-def analyze_lipsync(video_path: str, fps: int = 25,
-                    corr_win_s: float = 1.0,
-                    corr_thresh: float = 0.25,
-                    lag_bad_ms: int = 220) -> LipSyncResult:
+def analyze_lipsync(
+    video_path: str,
+    fps: int = 25,
+    corr_win_s: float = 0.8,     # shorter window smooths less (was 1.0)
+    corr_thresh: float = 0.20,   # more tolerant (was 0.25)
+    min_span_s: float = 1.00,    # require sustained issue (was ~0.6)
+    face_cov_req: float = 0.60,  # need ≥60% tracked face frames
+    weak_audio_rms: float = 0.005  # skip if audio is ultra-quiet
+) -> LipSyncResult:
+    # ---- video → mouth series ----
     frames, frame_times, vid_dur = load_video_frames(video_path, fps=fps)
-    mouth, _ = extract_mouth_series(frames, fps=fps)
+    mouth, _, face_cov = extract_mouth_series(frames, fps=fps)
+
+    # not enough face → don't judge
+    if face_cov < face_cov_req:
+        return LipSyncResult(
+            suspicious_spans=[],
+            details={
+                "video_duration_s": float(vid_dur),
+                "fps": int(fps),
+                "face_coverage": round(float(face_cov), 3),
+                "note": f"insufficient face coverage (<{face_cov_req:.0%})",
+            },
+        )
+
     mouth = zscore(mouth)
 
+    # ---- audio → env ----
     y, sr, _ = load_audio_mono(video_path, target_sr=16000)
-    env = audio_envelope(y, sr, frame_times)
+    if y is None or len(y) < sr // 2:
+        return LipSyncResult(
+            suspicious_spans=[],
+            details={
+                "video_duration_s": float(vid_dur),
+                "fps": int(fps),
+                "face_coverage": round(float(face_cov), 3),
+                "note": "no/short audio",
+            },
+        )
+    env, avg_rms = audio_envelope(y, sr, frame_times)
+    if avg_rms < weak_audio_rms:
+        return LipSyncResult(
+            suspicious_spans=[],
+            details={
+                "video_duration_s": float(vid_dur),
+                "fps": int(fps),
+                "face_coverage": round(float(face_cov), 3),
+                "note": f"very weak audio (avg_rms={avg_rms:.4f})",
+            },
+        )
 
-    # sliding correlation
+    # ---- sliding correlation ----
     win = max(3, int(corr_win_s * fps))
     r = sliding_corr(mouth, env, win=win)
 
-    # low correlation mask
+    # ---- conservative flagging: only sustained low correlation ----
     low_corr = r < corr_thresh
+    spans = spans_from_mask(low_corr, frame_times, min_s=min_span_s)
 
-    # overall lag estimate
-    lag_ms = estimate_lag(mouth, env, fps=fps, max_ms=400)
-    bad_lag = abs(lag_ms) >= lag_bad_ms
+    out_spans = [
+        {"start": float(s), "end": float(e), "reason": f"Low lip↔audio correlation (r<{corr_thresh})"}
+        for (s, e) in spans
+    ]
 
-    spans = spans_from_masks(low_corr, frame_times, min_s=max(0.6, corr_win_s * 0.6))
-    out_spans = [{"start": float(s), "end": float(e),
-                  "reason": f"Low lip↔audio correlation (r<{corr_thresh})"} for (s, e) in spans]
-
-    if bad_lag:
-        # add a whole-clip lag note (UX: coordinator will merge)
-        out_spans.append({"start": 0.0, "end": float(vid_dur),
-                          "reason": f"Lip–audio lag ≈ {lag_ms:.0f} ms (>|={lag_bad_ms} ms)"})
+    # NOTE: We do NOT add a whole-clip lag span; we only report lag in details.
+    # Global lag is useful context but easily over-flags; keep it descriptive only.
+    # (If you still want it, gate by low-corr coverage first.)
+    # Global lag estimate (for details)
+    try:
+        a0, b0 = mouth, env
+        xcorr = np.correlate(a0, b0, mode="full")
+        lags = np.arange(-(len(a0) - 1), len(a0))
+        max_ms = 400
+        max_lag_frames = max(1, int((max_ms / 1000.0) * fps))
+        m = (lags >= -max_lag_frames) & (lags <= max_lag_frames)
+        best_lag = int(lags[m][np.argmax(xcorr[m])])
+        lag_ms = float(best_lag * 1000.0 / fps)
+    except Exception:
+        lag_ms = 0.0
 
     details = {
         "fps": int(fps),
         "corr_window_s": float(corr_win_s),
         "corr_thresh": float(corr_thresh),
-        "lag_ms": float(round(lag_ms, 1)),
+        "min_span_s": float(min_span_s),
+        "face_coverage": round(float(face_cov), 3),
         "video_duration_s": float(vid_dur),
+        "avg_audio_rms": float(round(avg_rms, 5)),
+        "lag_ms": float(round(lag_ms, 1)),
         "mean_corr": float(round(np.nanmean(r), 3)),
     }
     return LipSyncResult(suspicious_spans=out_spans, details=details)
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="LipSync Agent MVP")
+    p = argparse.ArgumentParser(description="LipSync Agent (conservative)")
     p.add_argument("--in", dest="inp", required=True, help="Path to video (mp4)")
     p.add_argument("--fps", type=int, default=25)
-    p.add_argument("--win", type=float, default=1.0, help="Correlation window seconds")
-    p.add_argument("--rmin", type=float, default=0.25, help="Low-corr threshold")
-    p.add_argument("--lagbad", type=int, default=220, help="ms lag threshold for flag")
+    p.add_argument("--win", type=float, default=0.8, help="Correlation window seconds")
+    p.add_argument("--rmin", type=float, default=0.20, help="Low-corr threshold")
+    p.add_argument("--minspan", type=float, default=1.0, help="Min suspicious span seconds")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
 
-    res = analyze_lipsync(args.inp, fps=args.fps, corr_win_s=args.win, corr_thresh=args.rmin, lag_bad_ms=args.lagbad)
+    res = analyze_lipsync(
+        args.inp, fps=args.fps, corr_win_s=args.win, corr_thresh=args.rmin, min_span_s=args.minspan
+    )
     payload = {
         "agent": "lipsync",
         "metric": res.metric,
@@ -216,3 +243,4 @@ if __name__ == "__main__":
     else:
         print("✅ LipSync Agent")
         print(json.dumps(payload, indent=2))
+
