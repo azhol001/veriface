@@ -15,7 +15,7 @@ try:
 except Exception:
     probe_media_meta = None
 
-COORD_VERSION = "coordinator/1.2.0"
+COORD_VERSION = "coordinator/1.3.0"
 
 # --------------------------- helpers ---------------------------
 
@@ -51,7 +51,7 @@ def _merge_spans(spans: List[Dict], join_tol: float = 0.15) -> List[Dict]:
     spans = sorted(
         [{"start": _f(s["start"]), "end": _f(s["end"]), "reason": str(s.get("reason","")), "source": str(s.get("source","?"))}
          for s in spans],
-        key=lambda x: (x["start"], x["end"])
+        key=lambda x: (x["start"], x["end"] )
     )
     merged: List[Dict] = []
     cur = dict(spans[0])
@@ -83,6 +83,12 @@ def _sum_raw(per_agent: Dict[str, Dict]) -> Tuple[int, float]:
             secs += _span_len(s)
     return count, round(secs, 2)
 
+def _agent_seconds(per_agent: Dict[str, Dict], name: str) -> float:
+    secs = 0.0
+    for s in (per_agent.get(name, {}).get("spans") or []):
+        secs += _span_len(s)
+    return round(secs, 2)
+
 # --------------------------- main ---------------------------
 
 def run_all(video_path: str, fps: int = 25) -> Dict:
@@ -92,7 +98,7 @@ def run_all(video_path: str, fps: int = 25) -> Dict:
     """
     # Run sub-analyzers (sequential MVP)
     bl = analyze_blinks(video_path, fps=fps, use_stream=True, frame_stride=1)
-    vo = analyze_voice(video_path, fps=fps)
+    vo = analyze_voice(video_path, fps=fps)   # voice accepts fps (ignored) for compatibility
     ls = analyze_lipsync(video_path, fps=fps)
 
     # Raw spans from each detector (then filter out micro-blips)
@@ -114,17 +120,25 @@ def run_all(video_path: str, fps: int = 25) -> Dict:
         },
     }
 
-    # Insufficient-source flags the UI can show
-    insufficient_sources = []
-    insufficient_notes = []
+    # Detect insufficient inputs (so verdict can be "Inconclusive")
+    insufficient_sources: List[str] = []
+    insufficient_notes: List[str] = []
+
     bdet = per_agent["blink"]["details"] or {}
-    if isinstance(bdet.get("description", ""), str) and "insufficient" in bdet["description"]:
+    if "description" in bdet and ("insufficient" in bdet["description"] or "skip" in bdet["description"]):
         insufficient_sources.append("blink")
-        insufficient_notes.append(f'blink: {bdet["description"]}')
+        insufficient_notes.append(f'blink: {bdet.get("description")}')
+
     ldet = per_agent["lipsync"]["details"] or {}
     if _f(ldet.get("face_coverage"), 1.0) < 0.60:
         insufficient_sources.append("lipsync")
         insufficient_notes.append(f'lipsync: insufficient face coverage ({_f(ldet.get("face_coverage")):.2f})')
+
+    vdet = per_agent["voice"]["details"] or {}
+    if ("note" in vdet and "weak" in str(vdet["note"]).lower()) or _f(vdet.get("rms_full"), 0.02) < 0.004:
+        insufficient_sources.append("voice")
+        msg = vdet.get("note", f'low audio level (rms={_f(vdet.get("rms_full")):.4f})')
+        insufficient_notes.append(f'voice: {msg}')
 
     # Build flat list with sources for merging
     spans_all: List[Dict] = []
@@ -161,16 +175,45 @@ def run_all(video_path: str, fps: int = 25) -> Dict:
     sources_flagged = [k for k, v in per_agent.items() if len((v.get("spans") or [])) > 0]
     timeline_ratio = (timeline_secs / clip_seconds) if clip_seconds else 0.0
 
-    def _verdict(sources: List[str], t_secs: float, clip_secs: float, insufficient: List[str]) -> str:
+    # Per-detector seconds (for UI/debugging)
+    lipsync_secs = _agent_seconds(per_agent, "lipsync")
+    voice_secs   = _agent_seconds(per_agent, "voice")
+    blink_secs   = _agent_seconds(per_agent, "blink")
+
+    # ---------------- Verdict (conservative) ----------------
+    def _verdict(sources: List[str], t_secs: float, clip_secs: float,
+                 insufficient: List[str]) -> Tuple[str, Dict]:
+        # short clips: avoid bold claims
+        if clip_secs < 6.0:
+            return ("⚠️ Inconclusive — Clip too short.", {"reason": "short_clip", "clip_s": clip_secs})
+
         if insufficient and not sources:
-            return "⚠️ Inconclusive — Insufficient evidence (input quality too low)."
-        if not sources and t_secs < max(2.0, 0.02 * clip_secs):
-            return "✅ Likely Genuine — No sustained anomalies."
-        if len(sources) == 1 and t_secs < max(3.0, 0.08 * clip_seconds):
-            return "⚠️ Needs Review — Some signals, not decisive."
-        if len(sources) >= 2 and t_secs >= max(4.0, 0.15 * clip_secs):
-            return "❌ Likely Deepfake — Multiple detectors and sustained suspicious activity."
-        return "⚠️ Needs Review — Some signals, not decisive."
+            return ("⚠️ Inconclusive — Insufficient evidence (input quality too low).",
+                    {"reason": "insufficient_inputs", "insufficient": insufficient})
+
+        frac = (t_secs / clip_secs) if clip_secs else 0.0
+        core_present = any(s in ("lipsync", "voice") for s in sources)
+
+        # Likely Genuine: almost nothing suspicious
+        if not sources or frac < 0.08:
+            return ("✅ Likely Genuine — No sustained anomalies.", {"frac": round(frac,3), "sources": sources})
+
+        # Likely Deepfake: requires core detectors (lip/voice)
+        if core_present:
+            # Case A: at least two detectors agree and enough coverage
+            if len(sources) >= 2 and frac >= 0.25:
+                return ("❌ Likely Deepfake — Multiple detectors and sustained suspicious activity.",
+                        {"frac": round(frac,3), "sources": sources})
+            # Case B: both lip & voice present with moderate coverage
+            if ("lipsync" in sources and "voice" in sources) and frac >= 0.18:
+                return ("❌ Likely Deepfake — Lip-sync and Voice both flag sustained issues.",
+                        {"frac": round(frac,3), "sources": sources})
+
+        # Everything else → Needs Review
+        return ("⚠️ Needs Review — Some signals, not decisive.",
+                {"frac": round(frac,3), "sources": sources, "insufficient": insufficient})
+
+    verdict_text, verdict_details = _verdict(sources_flagged, timeline_secs, clip_seconds, insufficient_sources)
 
     summary = {
         "clip_seconds": clip_seconds,
@@ -182,8 +225,14 @@ def run_all(video_path: str, fps: int = 25) -> Dict:
         "total_suspicious_seconds": timeline_secs,
         "raw_total_seconds": raw_secs,
         "timeline_ratio": round(timeline_ratio, 3),
+        "per_detector_seconds": {
+            "lipsync": lipsync_secs,
+            "voice": voice_secs,
+            "blink": blink_secs,
+        },
         "params": {"min_span": 0.75, "join_tol": 0.15},
-        "verdict": _verdict(sources_flagged, timeline_secs, clip_seconds, insufficient_sources),
+        "verdict": verdict_text,
+        "verdict_details": verdict_details,
         "version": COORD_VERSION,
     }
 
