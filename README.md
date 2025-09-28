@@ -34,7 +34,6 @@ The system is designed to be **scalable, distributed, and user-friendly**, makin
 
 ## System Architecture  
 
-### Mermaid Diagram
 ```mermaid
 flowchart TD
     subgraph Agents
