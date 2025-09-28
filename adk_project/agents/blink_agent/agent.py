@@ -1,8 +1,11 @@
 # adk_project/agents/blink_agent/agent.py
+# Blink Agent (MVP): uses MediaPipe Face Mesh to estimate eye aspect ratio (EAR)
+# Finds blinks and flags unusually long no-blink gaps as "suspicious" spans.
+ 
 from __future__ import annotations
 import json
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import List, Optional, Dict
 
 import numpy as np
 import mediapipe as mp
@@ -29,8 +32,7 @@ def detect_blinks_stream(
     min_closed_frames: int = 3,
     proc_width: Optional[int] = 320,
 ):
-    """Streaming blink detector: fully online and memory-efficient"""
-
+    """Streaming blink detector: optimized for speed and memory."""
     mp_face_mesh = mp.solutions.face_mesh
     face_mesh = mp_face_mesh.FaceMesh(
         static_image_mode=False,
@@ -40,10 +42,10 @@ def detect_blinks_stream(
         min_tracking_confidence=0.5,
     )
 
-    blink_times: List[float] = []
-    blink_durations: List[float] = []
-    ear_series: List[float] = []
-    times: List[float] = []
+    blink_times = []
+    blink_durations = []
+    ear_series = []
+    times = []
 
     total_frames = 0
     missing_count = 0
@@ -55,13 +57,15 @@ def detect_blinks_stream(
             total_frames += 1
             h, w = frame.shape[:2]
 
-            # Resize for faster processing
+            # Resize frame if needed
             if proc_width is not None and w > proc_width:
                 scale = proc_width / w
                 proc_frame = cv2.resize(frame, (proc_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+                proc_h, proc_w = proc_frame.shape[:2]
             else:
                 proc_frame = frame
                 scale = 1.0
+                proc_h, proc_w = h, w
 
             results = face_mesh.process(proc_frame)
 
@@ -75,17 +79,18 @@ def detect_blinks_stream(
 
             # Map landmarks to original frame coordinates
             face = results.multi_face_landmarks[0]
-            pts = np.array([(lm.x * proc_frame.shape[1] / scale, lm.y * proc_frame.shape[0] / scale)
-                            for lm in face.landmark], dtype=np.float32)
+            lm = np.array([[lmk.x * proc_w / scale, lmk.y * proc_h / scale] for lmk in face.landmark], dtype=np.float32)
 
-            # Compute EAR
-            le = _ear_from_landmarks(pts, LEFT_EYE)
-            re = _ear_from_landmarks(pts, RIGHT_EYE)
-            ear = (le + re) / 2.0
+            # EAR computation
+            def eye_ear(idx):
+                pts = lm[idx]
+                return (np.linalg.norm(pts[1] - pts[4]) + np.linalg.norm(pts[2] - pts[5])) / (2.0 * (np.linalg.norm(pts[0] - pts[3]) + 1e-6))
+
+            ear = (eye_ear(LEFT_EYE) + eye_ear(RIGHT_EYE)) / 2.0
             ear_series.append(ear)
             times.append(ts)
 
-            # Online blink detection
+            # Blink detection
             if ear < ear_thresh:
                 if closed_streak == 0:
                     closed_start_ts = ts
@@ -94,19 +99,19 @@ def detect_blinks_stream(
                 if closed_streak >= min_closed_frames and closed_start_ts is not None:
                     center_ts = closed_start_ts + (ts - closed_start_ts) / 2.0
                     blink_times.append(center_ts)
-                    blink_durations.append(max(0.0, ts - closed_start_ts))
+                    blink_durations.append(ts - closed_start_ts)
                 closed_streak = 0
                 closed_start_ts = None
     finally:
         face_mesh.close()
 
-    # Tail case: last frames closed
+    # Tail case
     if closed_streak >= min_closed_frames and closed_start_ts is not None:
         center_ts = closed_start_ts + (ts - closed_start_ts) / 2.0
         blink_times.append(center_ts)
-        blink_durations.append(max(0.0, ts - closed_start_ts))
+        blink_durations.append(ts - closed_start_ts)
 
-    # Smooth EAR series
+    # Smooth EAR
     ear_arr = np.array(ear_series, dtype=np.float32)
     if ear_arr.size > 0:
         nan_mask = np.isnan(ear_arr)
@@ -121,16 +126,16 @@ def detect_blinks_stream(
     metrics = {
         "frame_count": total_frames,
         "missing_frames": missing_count,
-        "nan_fraction": missing_count / total_frames if total_frames > 0 else 1.0,
+        "nan_fraction": missing_count / total_frames if total_frames else 1.0,
         "blink_count": len(blink_times),
         "avg_blink_duration_s": float(np.mean(blink_durations)) if blink_durations else 0.0,
         "blink_durations_s": blink_durations,
     }
 
     if len(blink_times) >= 2:
-        intervals = list(np.diff(sorted(blink_times)))
-        metrics["blink_intervals_s"] = intervals
-        metrics["interval_cov"] = float(np.std(intervals)/np.mean(intervals)) if np.mean(intervals) > 0 else float('inf')
+        intervals = np.diff(sorted(blink_times))
+        metrics["blink_intervals_s"] = intervals.tolist()
+        metrics["interval_cov"] = float(np.std(intervals)/np.mean(intervals)) if np.mean(intervals) else float('inf')
     else:
         metrics["blink_intervals_s"] = []
         metrics["interval_cov"] = None
@@ -209,3 +214,46 @@ def analyze_blinks(video_path: str,
         details["description"] = robotic["reason"]
     else:
         details["description"] = f"{metrics['blink_count']} blinks, avg dur {metrics['avg_blink_duration_s']:.2f}s"
+
+    out_spans = [{"start": float(s), "end": float(e), "reason": r} for (s, e, r) in spans]
+    return BlinkResult(suspicious_spans=out_spans, details=details)
+
+# ---------------- CLI ----------------
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser(description="Blink Agent (streaming-efficient)")
+    p.add_argument("--in", dest="inp", required=True, help="Path to video (mp4)")
+    p.add_argument("--fps", type=int, default=25)
+    p.add_argument("--frame-stride", type=int, default=1, help="Process every Nth frame")
+    p.add_argument("--stream", action="store_true", help="Stream frames (don't load all frames into memory)")
+    p.add_argument("--ear-thresh", type=float, default=0.19)
+    p.add_argument("--min-closed-frames", type=int, default=3)
+    p.add_argument("--proc-width", type=int, default=320)
+    p.add_argument("--cov-thresh", type=float, default=0.2)
+    p.add_argument("--min-robot-count", type=int, default=4)
+    p.add_argument("--json", action="store_true", help="Print JSON only")
+    args = p.parse_args()
+
+    result = analyze_blinks(
+        args.inp,
+        fps=args.fps,
+        ear_thresh=args.ear_thresh,
+        min_closed_frames=args.min_closed_frames,
+        proc_width=args.proc_width,
+        frame_stride=args.frame_stride,
+        use_stream=args.stream or args.frame_stride > 1,
+    )
+
+    payload = {
+        "agent": "blink",
+        "metric": result.metric,
+        "suspicious_spans": result.suspicious_spans,
+        "details": result.details,
+    }
+
+    if args.json:
+        print(json.dumps(payload))
+    else:
+        print("✅ Blink Agent (efficient)")
+        print(json.dumps(payload, indent=2))
