@@ -1,7 +1,7 @@
 # adk_project/agents/voice_agent/agent.py
-# Voice Agent (conservative, quality-gated):
+# Voice Agent (conservative, speech-gated):
 # Flags spans only when BOTH (a) spectral flatness is unusually high AND (b) MFCC variance is unusually low,
-# and only if audio is sufficiently long and strong. Skips weak/short audio and filters micro-blips.
+# and only if audio is sufficiently long/strong and during non-silent speech. Skips weak/short audio and filters micro-blips.
 
 from __future__ import annotations
 import json
@@ -21,22 +21,22 @@ def _rolling_median(x: np.ndarray, w: int) -> np.ndarray:
     from numpy.lib.stride_tricks import sliding_window_view
     sw = sliding_window_view(x, w)
     med = np.median(sw, axis=1)
-    # center back to original length by padding
     pad = w // 2
+    # pad equally on both sides to restore original length
     return np.pad(med, (pad, x.size - med.size - pad), mode="edge")
 
 def _iqr_bounds(x: np.ndarray, k: float = 1.0) -> Tuple[float, float]:
     """Robust bounds using IQR (conservative)."""
     x = x[np.isfinite(x)]
     if x.size < 16:
-        return np.inf, -np.inf  # essentially disables
+        return np.inf, -np.inf  # disables if not enough frames
     q1, q3 = np.percentile(x, [25, 75])
     iqr = max(1e-8, q3 - q1)
     upper = q3 + k * iqr
     lower = q1 - k * iqr
     return float(upper), float(lower)
 
-def _merge_spans(spans: List[Tuple[float, float, str]], join_gap: float = 0.2) -> List[Tuple[float, float, str]]:
+def _merge_spans(spans: List[Tuple[float, float, str]], join_gap: float = 0.3) -> List[Tuple[float, float, str]]:
     spans = sorted(spans, key=lambda s: s[0])
     out: List[Tuple[float, float, str]] = []
     for s, e, r in spans:
@@ -45,9 +45,9 @@ def _merge_spans(spans: List[Tuple[float, float, str]], join_gap: float = 0.2) -
         else:
             ls, le, lr = out[-1]  # type: ignore
             if s <= le + join_gap:
-                out[-1][1] = max(le, e)  # type: ignore
+                out[-1][1] = max(le, e)  # extend
             else:
-                out.append([s, e, r])  # type: ignore
+                out.append([s, e, r])  # new
     return [(float(s), float(e), r) for s, e, r in out]  # type: ignore
 
 def _span_len(s: Tuple[float, float]) -> float:
@@ -67,18 +67,18 @@ def analyze_voice(
     target_sr: int = 16000,
     win_s: float = 0.5,
     hop_s: float = 0.25,
-    min_span_s: float = 1.0,
-    weak_audio_rms: float = 0.01,     # raised from 0.005 → require stronger audio
-    min_duration_s: float = 4.0,      # require ≥4s of audio
-    iqr_k: float = 1.0,
-    fps: int = 25,   # optional, ignored (compatibility with coordinator)
+    min_span_s: float = 1.2,        # require longer sustained issue (was 1.0)
+    weak_audio_rms: float = 0.01,   # require stronger audio
+    min_duration_s: float = 4.0,    # require ≥4s of audio
+    iqr_k: float = 1.0,             # IQR tightness for robust outlier bounds
+    fps: int = 25,                  # optional, ignored (compatibility with coordinator)
 ) -> VoiceResult:
     """
     Conservative voice anomaly detector.
-    Flags spans only where BOTH conditions hold (after smoothing):
+    Flags spans only where BOTH conditions hold (after smoothing) and during speech:
       - spectral flatness is unusually high (upper IQR bound)
       - MFCC variance is unusually low  (lower IQR bound)
-    Gated by simple audio-quality checks (duration & RMS).
+    Gated by audio-duration, RMS (strength), and speech presence.
     """
 
     # ---- load audio ----
@@ -110,35 +110,57 @@ def analyze_voice(
                 "note": f"very weak audio (rms={rms_full:.4f} < {weak_audio_rms})",
                 "sr": int(sr),
                 "duration_s": float(dur or 0.0),
+                "rms_full": float(rms_full),
             },
         )
 
-    # ---- frame STFT ----
+    # ---- speech / non-silent gating ----
+    # Build frame-wise speech mask using librosa.effects.split (non-silent intervals)
+    nonsilent = librosa.effects.split(y, top_db=30)  # conservative nonsilence
+    # frame times centered for STFT frames
     hop = int(sr * hop_s)
     win = int(sr * win_s)
     hop = max(1, hop)
     win = max(hop * 2, win)
 
-    # n_fft must be >= win_length; choose next power of two for efficiency
     import math
     n_fft = 1 << int(math.ceil(math.log2(max(2048, win))))
-
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop, win_length=win))  # (freq, frames)
+    n_frames = S.shape[1]
+    frame_centers = (np.arange(n_frames) * hop + win // 2) / sr  # seconds
 
-    # spectral flatness in [0..1], higher = flatter
-    flat = librosa.feature.spectral_flatness(S=S).flatten()
+    speech_mask = np.zeros(n_frames, dtype=bool)
+    for s_i, e_i in nonsilent:
+        s_t = s_i / sr
+        e_t = e_i / sr
+        in_seg = (frame_centers >= s_t) & (frame_centers <= e_t)
+        speech_mask[in_seg] = True
 
-    # MFCC variance over coefficients per frame (proxy for formant dynamics)
+    speech_fraction = float(np.mean(speech_mask)) if n_frames else 0.0
+    # If almost no speech present, skip (music, silence, etc.)
+    if speech_fraction < 0.20:
+        return VoiceResult(
+            suspicious_spans=[],
+            details={
+                "note": f"insufficient speech (speech_fraction={speech_fraction:.2f})",
+                "sr": int(sr),
+                "duration_s": float(dur or 0.0),
+                "rms_full": float(rms_full),
+            },
+        )
+
+    # ---- features (flatness & MFCC variance) ----
+    flat = librosa.feature.spectral_flatness(S=S).flatten()  # [0..1], higher = flatter
     power = (S ** 2).astype(np.float32)
     mfcc = librosa.feature.mfcc(S=librosa.power_to_db(power + 1e-12), n_mfcc=13)
     mfcc_var = np.var(mfcc, axis=0)
 
-    # ---- smooth with rolling median (~0.6 s) ----
-    smooth_w = max(5, int(0.6 / hop_s))  # e.g., hop=0.25s -> w≈2-3, clamp to >=5
+    # ---- smooth (~0.6 s) ----
+    smooth_w = max(5, int(0.6 / hop_s))
     flat_s = _rolling_median(flat, smooth_w)
     mfcc_s = _rolling_median(mfcc_var, smooth_w)
 
-    n = min(flat_s.size, mfcc_s.size)
+    n = min(flat_s.size, mfcc_s.size, n_frames)
     if n == 0:
         return VoiceResult(
             suspicious_spans=[],
@@ -147,20 +169,19 @@ def analyze_voice(
 
     flat_s = flat_s[:n]
     mfcc_s = mfcc_s[:n]
+    speech_mask = speech_mask[:n]
+    t = frame_centers[:n]
 
     # ---- robust thresholds (conservative) ----
-    up_flat, _ = _iqr_bounds(flat_s, k=iqr_k)  # high flatness
-    _, lo_mvar = _iqr_bounds(mfcc_s, k=iqr_k)  # low mfcc variance
+    up_flat, _ = _iqr_bounds(flat_s, k=iqr_k)   # unusually high flatness
+    _, lo_mvar = _iqr_bounds(mfcc_s, k=iqr_k)   # unusually low MFCC variance
 
-    # logical AND mask
-    flags = (flat_s >= up_flat) & (mfcc_s <= lo_mvar)
+    # logical AND + speech gate
+    flags = (flat_s >= up_flat) & (mfcc_s <= lo_mvar) & speech_mask
 
     # ---- build spans (sustain & merge) ----
     spans: List[Tuple[float, float, str]] = []
     if np.any(flags):
-        # timestamps per frame center
-        t = (np.arange(n) * hop / sr) + (win / (2 * sr))
-        # group consecutive flagged frames
         idx = np.where(flags)[0]
         groups = np.split(idx, np.where(np.diff(idx) != 1)[0] + 1)
         for g in groups:
@@ -170,7 +191,15 @@ def analyze_voice(
             e = float(t[g[-1]])
             if _span_len((s, e)) >= min_span_s:
                 spans.append((s, e, "Audio anomaly (flatness↑ & MFCC var↓)"))
-    spans = _merge_spans(spans, join_gap=0.2)
+    spans = _merge_spans(spans, join_gap=0.3)
+
+    # ---- post-gate: require meaningful fraction of speech time ----
+    total_speech_secs = float(np.sum(speech_mask)) * (hop / sr)
+    flagged_secs = sum(_span_len((s, e)) for s, e, _ in spans)
+    min_flag_secs = max(1.6, 0.10 * total_speech_secs)  # ≥ 1.6s OR 10% of speech time
+
+    if flagged_secs < min_flag_secs:
+        spans = []  # not enough sustained evidence
 
     out_spans = [{"start": float(s), "end": float(e), "reason": r} for s, e, r in spans]
     details = {
@@ -186,6 +215,12 @@ def analyze_voice(
         "frames_flagged": int(np.count_nonzero(flags)),
         "frames_total": int(n),
         "rms_full": float(round(rms_full, 5)),
+        "speech_fraction": float(round(speech_fraction, 3)),
+        "total_speech_secs": float(round(total_speech_secs, 2)),
+        "flagged_secs": float(round(flagged_secs, 2)),
+        "min_flag_secs": float(round(min_flag_secs, 2)),
+        "flagged_speech_fraction": float(round(flagged_secs / (total_speech_secs + 1e-6), 3)),
+        "note": None if spans else "not enough sustained speech anomalies",
     }
     return VoiceResult(suspicious_spans=out_spans, details=details)
 
@@ -193,12 +228,12 @@ def analyze_voice(
 
 if __name__ == "__main__":
     import argparse
-    p = argparse.ArgumentParser(description="Voice Agent (conservative)")
+    p = argparse.ArgumentParser(description="Voice Agent (conservative, speech-gated)")
     p.add_argument("--in", dest="inp", required=True, help="Path to video/audio (mp4/wav)")
     p.add_argument("--sr", type=int, default=16000)
     p.add_argument("--win", type=float, default=0.5)
     p.add_argument("--hop", type=float, default=0.25)
-    p.add_argument("--minspan", type=float, default=1.0)
+    p.add_argument("--minspan", type=float, default=1.2)
     p.add_argument("--weak_rms", type=float, default=0.01)
     p.add_argument("--mindur", type=float, default=4.0)
     p.add_argument("--iqrk", type=float, default=1.0)
@@ -221,4 +256,6 @@ if __name__ == "__main__":
         "suspicious_spans": res.suspicious_spans,
         "details": res.details,
     }
-    print(json.dumps(payload if args.json else payload, indent=None if args.json else 2))
+    print(json.dumps(payload) if args.json else json.dumps(payload, indent=2))
+
+
