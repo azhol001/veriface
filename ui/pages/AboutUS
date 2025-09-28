@@ -1,24 +1,88 @@
+# ui/pages/1_About_Us.py
 import streamlit as st
 
-st.set_page_config(page_title="About Us — VeriFace")
+st.set_page_config(page_title="About • VeriFace", layout="wide")
 
-st.title("ℹ️ About Us")
+# ---------- THEME (same gradient as Home) ----------
+st.markdown("""
+<style>
+.stApp {
+  background: radial-gradient(1200px 600px at 85% 20%, rgba(92,61,255,0.25), rgba(0,0,0,0)),
+              radial-gradient(900px 500px at 10% 10%, rgba(0,135,255,0.18), rgba(0,0,0,0)),
+              #0B1020;
+  color: #E6E8F0;
+}
+.block-container{ max-width: 1100px; padding-top: 2.2rem; }
 
-st.write("""
-VeriFace is dedicated to detecting AI-generated content with precision and reliability.  
-Our mission is to empower individuals and organizations to identify deepfakes and maintain trust in digital media.
-""")
+/* Title + subtitle */
+.ab-title{
+  font-size: 3.0rem; font-weight: 800; line-height: 1.1;
+  text-align: center; margin: 0 0 .6rem 0;
+}
+.ab-sub{
+  text-align:center; color:#C9D0E3; font-size:1.05rem;
+  max-width: 820px; margin: 0 auto 1.8rem auto; line-height:1.7;
+}
 
-col1, col2, col3 = st.columns(3)
+/* Card */
+.card {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+  border-radius: 16px;
+  padding: 20px 22px;
+}
 
-with col1:
-    st.subheader("💡 Our Mission")
-    st.write("We provide accessible tools that help users discern authentic content from manipulated media.")
+/* Columns */
+.feature h3{ margin: 6px 0 8px 0; font-size: 1.25rem; }
+.feature p{ color:#BFC6DB; font-size:1.0rem; line-height:1.7; }
+.icon{ font-size: 1.6rem; opacity: .95; }
+.center{ text-align:center; }
 
-with col2:
-    st.subheader("📊 Our Approach")
-    st.write("We leverage state-of-the-art models and rigorous testing to ensure accurate detection results.")
+/* Footer link */
+.foot{ text-align:center; color:#C9D0E3; margin-top: 18px; }
+</style>
+""", unsafe_allow_html=True)
 
-with col3:
-    st.subheader("🤝 Our Commitment")
-    st.write("We prioritize user privacy, data security, and continuous improvement of detection capabilities.")
+# ---------- Header ----------
+st.markdown("<div class='ab-title'>About Us</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='ab-sub'>VeriFace is dedicated to detecting AI-generated content with precision and reliability. "
+    "Our mission is to empower individuals and organizations to identify deepfakes and maintain trust in digital media.</div>",
+    unsafe_allow_html=True
+)
+
+# ---------- 3-column card ----------
+st.markdown("<div class='card'>", unsafe_allow_html=True)
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    st.markdown("<div class='feature center'>", unsafe_allow_html=True)
+    st.markdown("<div class='icon'>💡</div>", unsafe_allow_html=True)
+    st.markdown("<h3>Our Mission</h3>", unsafe_allow_html=True)
+    st.markdown("<p>We strive to provide accessible tools that help users discern authentic content from manipulated media.</p>",
+                unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with c2:
+    st.markdown("<div class='feature center'>", unsafe_allow_html=True)
+    st.markdown("<div class='icon'>📈</div>", unsafe_allow_html=True)
+    st.markdown("<h3>Our Approach</h3>", unsafe_allow_html=True)
+    st.markdown("<p>Our solutions leverage state-of-the-art models and rigorous testing to ensure accurate detection results.</p>",
+                unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with c3:
+    st.markdown("<div class='feature center'>", unsafe_allow_html=True)
+    st.markdown("<div class='icon'>🤝</div>", unsafe_allow_html=True)
+    st.markdown("<h3>Our Commitment</h3>", unsafe_allow_html=True)
+    st.markdown("<p>We prioritize user privacy, data security, and continuous improvement of our detection capabilities.</p>",
+                unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------- Footer hint ----------
+try:
+    st.page_link("pages/2_FAQ.py", label="Still need help? Check our FAQ", icon="❓")
+except Exception:
+    st.markdown("<div class='foot'>Still need help? Check our FAQ.</div>", unsafe_allow_html=True)
