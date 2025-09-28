@@ -1,6 +1,7 @@
 # adk_project/agents/voice_agent/agent.py
-# Voice Agent (conservative): flags only when spectral flatness is high AND MFCC variance is low,
-# for sustained periods. Skips weak/short audio, filters micro-blips, merges gently.
+# Voice Agent (conservative, quality-gated):
+# Flags spans only when BOTH (a) spectral flatness is unusually high AND (b) MFCC variance is unusually low,
+# and only if audio is sufficiently long and strong. Skips weak/short audio and filters micro-blips.
 
 from __future__ import annotations
 import json
@@ -67,7 +68,8 @@ def analyze_voice(
     win_s: float = 0.5,
     hop_s: float = 0.25,
     min_span_s: float = 1.0,
-    weak_audio_rms: float = 0.005,
+    weak_audio_rms: float = 0.01,     # raised from 0.005 → require stronger audio
+    min_duration_s: float = 4.0,      # require ≥4s of audio
     iqr_k: float = 1.0,
     fps: int = 25,   # optional, ignored (compatibility with coordinator)
 ) -> VoiceResult:
@@ -76,31 +78,59 @@ def analyze_voice(
     Flags spans only where BOTH conditions hold (after smoothing):
       - spectral flatness is unusually high (upper IQR bound)
       - MFCC variance is unusually low  (lower IQR bound)
+    Gated by simple audio-quality checks (duration & RMS).
     """
 
     # ---- load audio ----
     y, sr, dur = load_audio_mono(path, target_sr=target_sr)
+
+    # duration gate
+    if (dur or 0.0) < min_duration_s:
+        return VoiceResult(
+            suspicious_spans=[],
+            details={
+                "note": f"audio too short ({dur:.2f}s < {min_duration_s}s)",
+                "sr": int(sr),
+                "duration_s": float(dur or 0.0),
+            },
+        )
+
     if y is None or len(y) < sr // 2:
-        return VoiceResult(suspicious_spans=[], details={"note": "no/short audio", "sr": sr, "duration_s": float(dur or 0.0)})
+        return VoiceResult(
+            suspicious_spans=[],
+            details={"note": "no/short audio", "sr": int(sr), "duration_s": float(dur or 0.0)}
+        )
 
     # quick RMS gate (ultra-quiet audio can look "flat" but isn't evidence)
     rms_full = float(np.sqrt(np.mean(y**2)))
     if rms_full < weak_audio_rms:
-        return VoiceResult(suspicious_spans=[], details={
-            "note": f"very weak audio (rms={rms_full:.4f} < {weak_audio_rms})",
-            "sr": sr, "duration_s": float(dur or 0.0)
-        })
+        return VoiceResult(
+            suspicious_spans=[],
+            details={
+                "note": f"very weak audio (rms={rms_full:.4f} < {weak_audio_rms})",
+                "sr": int(sr),
+                "duration_s": float(dur or 0.0),
+            },
+        )
 
     # ---- frame STFT ----
     hop = int(sr * hop_s)
     win = int(sr * win_s)
-    hop = max(1, hop); win = max(hop * 2, win)
-    S = np.abs(librosa.stft(y, n_fft=2048, hop_length=hop, win_length=win))  # (freq, frames)
+    hop = max(1, hop)
+    win = max(hop * 2, win)
+
+    # n_fft must be >= win_length; choose next power of two for efficiency
+    import math
+    n_fft = 1 << int(math.ceil(math.log2(max(2048, win))))
+
+    S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop, win_length=win))  # (freq, frames)
 
     # spectral flatness in [0..1], higher = flatter
     flat = librosa.feature.spectral_flatness(S=S).flatten()
+
     # MFCC variance over coefficients per frame (proxy for formant dynamics)
-    mfcc = librosa.feature.mfcc(S=librosa.power_to_db(S**2 + 1e-12), n_mfcc=13)
+    power = (S ** 2).astype(np.float32)
+    mfcc = librosa.feature.mfcc(S=librosa.power_to_db(power + 1e-12), n_mfcc=13)
     mfcc_var = np.var(mfcc, axis=0)
 
     # ---- smooth with rolling median (~0.6 s) ----
@@ -110,9 +140,13 @@ def analyze_voice(
 
     n = min(flat_s.size, mfcc_s.size)
     if n == 0:
-        return VoiceResult(suspicious_spans=[], details={"note": "too short after smoothing", "sr": sr})
+        return VoiceResult(
+            suspicious_spans=[],
+            details={"note": "too short after smoothing", "sr": int(sr), "duration_s": float(dur or 0.0)}
+        )
 
-    flat_s = flat_s[:n]; mfcc_s = mfcc_s[:n]
+    flat_s = flat_s[:n]
+    mfcc_s = mfcc_s[:n]
 
     # ---- robust thresholds (conservative) ----
     up_flat, _ = _iqr_bounds(flat_s, k=iqr_k)  # high flatness
@@ -146,6 +180,7 @@ def analyze_voice(
         "hop_s": float(hop_s),
         "smooth_w_frames": int(smooth_w),
         "weak_audio_rms": float(weak_audio_rms),
+        "min_duration_s": float(min_duration_s),
         "iqr_k": float(iqr_k),
         "thresholds": {"flat_upper": float(up_flat), "mfcc_var_lower": float(lo_mvar)},
         "frames_flagged": int(np.count_nonzero(flags)),
@@ -164,7 +199,8 @@ if __name__ == "__main__":
     p.add_argument("--win", type=float, default=0.5)
     p.add_argument("--hop", type=float, default=0.25)
     p.add_argument("--minspan", type=float, default=1.0)
-    p.add_argument("--weak_rms", type=float, default=0.005)
+    p.add_argument("--weak_rms", type=float, default=0.01)
+    p.add_argument("--mindur", type=float, default=4.0)
     p.add_argument("--iqrk", type=float, default=1.0)
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
@@ -176,6 +212,7 @@ if __name__ == "__main__":
         hop_s=args.hop,
         min_span_s=args.minspan,
         weak_audio_rms=args.weak_rms,
+        min_duration_s=args.mindur,
         iqr_k=args.iqrk,
     )
     payload = {
@@ -185,4 +222,3 @@ if __name__ == "__main__":
         "details": res.details,
     }
     print(json.dumps(payload if args.json else payload, indent=None if args.json else 2))
-
