@@ -1,5 +1,89 @@
+# ui/pages/2_FAQ.py
 import streamlit as st
-st.set_page_config(page_title="FAQ • VeriFace")
-st.title("FAQ")
-st.write("Coming soon. Add short answers — formats supported, privacy, known limitations, etc.")
 
+st.set_page_config(page_title="FAQ • VeriFace", layout="wide")
+
+# ---------- PAGE THEME (matches your home gradient) ----------
+st.markdown("""
+<style>
+.stApp {
+  background: radial-gradient(1200px 600px at 85% 20%, rgba(92,61,255,0.25), rgba(0,0,0,0)),
+              radial-gradient(900px 500px at 10% 10%, rgba(0,135,255,0.18), rgba(0,0,0,0)),
+              #0B1020;
+  color: #E6E8F0;
+}
+.block-container{ max-width: 1100px; padding-top: 2.2rem; }
+
+/* Title */
+.faq-title{
+  font-size: 3.2rem; font-weight: 800; line-height: 1.1;
+  text-align: center; margin: 0 0 1.8rem 0;
+}
+
+/* Accordion card look (for expanders) */
+.faq-card {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));
+  border-radius: 16px;
+  padding: 4px 10px;
+  margin: 14px 0;
+}
+
+/* Reduce expander default padding so it looks tighter */
+div[data-testid="stExpander"] div[role="button"] p {
+  font-weight: 700; font-size: 1.15rem; margin: 2px 0 !important;
+}
+div[data-testid="stExpander"] .stMarkdown p {
+  color: #C9D0E3; font-size: 1.02rem; line-height: 1.6;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("<div class='faq-title'>Frequently Asked Questions</div>", unsafe_allow_html=True)
+
+# --------- helper to render a styled expander ----------
+def faq(question: str, answer_md: str):
+    st.markdown("<div class='faq-card'>", unsafe_allow_html=True)
+    with st.expander(question, expanded=False):
+        st.markdown(answer_md)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# --------- The FAQs (edit text freely) ----------
+faq("What is a deepfake?",
+    "A deepfake is a video or audio that has been artificially generated or manipulated by AI.")
+
+faq("How accurate is VeriFace?",
+    "We focus on **transparent evidence** (timestamps + reasons) instead of a single score. "
+    "Our detectors are calibrated to be conservative in demo mode, and we show what each flag means.")
+
+faq("What happens to my uploaded files?",
+    "In this hackathon demo, analysis happens **locally** and files are **not stored**. "
+    "If you deploy to a server later, update the Privacy page with your storage policy.")
+
+faq("Does it work on all types of videos?",
+    "Best on **talking-head** clips with clear face and audible speech. "
+    "Fast cuts, music, heavy noise, or tiny faces can reduce reliability.")
+
+faq("How long does the analysis take?",
+    "Typically **5–30 seconds** for short clips (depends on CPU/GPU and clip length).")
+
+faq("Can I use the results in court or investigations?",
+    "Treat this as a **screening tool**. It highlights suspicious segments to review. "
+    "For formal use, pair with expert analysis and chain-of-custody procedures.")
+
+faq("Is my data shared with third parties?",
+    "No. In this demo, nothing is uploaded to external services. "
+    "If you enable cloud mode in the future, disclose that clearly in Privacy Policy.")
+
+faq("What does each detector look for?",
+    "- **LipSync**: mismatch between mouth motion and audio energy.\n"
+    "- **Blink**: unnatural blink patterns (e.g., no blinks for a long time).\n"
+    "- **Voice**: spectral artifacts consistent with TTS or heavy editing.\n\n"
+    "We combine them and show a **timeline** of suspicious moments.")
+
+faq("What are known limitations?",
+    "- Very **quiet/noisy audio**, obstructed faces, profile views, or fast edits can reduce reliability.\n"
+    "- Detectors may be conservative and mark **Inconclusive** instead of forcing a call.")
+
+# Footer spacer
+st.markdown("<br><br>", unsafe_allow_html=True)
