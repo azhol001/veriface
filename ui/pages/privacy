@@ -1,5 +1,75 @@
+# privacy_policy.py
 import streamlit as st
-st.set_page_config(page_title="Privacy • VeriFace")
-st.title("Privacy Policy")
-st.write("Coming soon. For the hack demo, files are processed locally and not stored.")
 
+st.set_page_config(page_title="Privacy Policy — VeriFace", layout="centered")
+
+# Background style
+st.markdown("""
+    <style>
+    .main {
+        background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+        color: #e2e8f0;
+        font-family: 'Inter', sans-serif;
+    }
+    .stExpander {
+        background-color: rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        margin-bottom: 10px;
+    }
+    .policy-card {
+        padding: 20px;
+        border-radius: 15px;
+        background: rgba(255,255,255,0.05);
+        margin: 15px 0;
+    }
+    h1, h2, h3 {
+        color: #fff !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Title
+st.markdown("<h1 style='text-align:center;'>Privacy Policy</h1>", unsafe_allow_html=True)
+st.write("""
+Your privacy is important to us. This policy outlines how we collect, use, and protect your information when you use our deepfake detection services.
+""")
+
+# Policy Sections
+st.markdown("---")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("""
+    <div class="policy-card">
+        <h3>💡 Information Collection</h3>
+        <p>We collect uploaded videos and related metadata solely for the purpose of providing our services.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="policy-card">
+        <h3>📊 Use of Information</h3>
+        <p>Collected data is used to analyze for deepfakes and to improve our detection models.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown("""
+    <div class="policy-card">
+        <h3>🛡 Data Security</h3>
+        <p>We implement robust security measures to protect your data from unauthorized access.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="policy-card">
+        <h3>💾 Data Retention</h3>
+        <p>Uploaded videos are automatically deleted after 24 hours, ensuring your privacy is respected.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("---")
+st.markdown("""
+For more details, please see our full [policy](#).
+""")
