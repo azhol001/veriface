@@ -1,23 +1,29 @@
 steps:
-  # Build UI image from ui/Dockerfile
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA', '-f', 'ui/Dockerfile', 'ui']
+ - name: gcr.io/cloud-builders/docker
+ args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA", "-f", "ui/Dockerfile", "."]
+ - name: gcr.io/cloud-builders/docker
+ args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA"]
 
-  # Push image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA']
+ # Fetch API URL and deploy UI with API_BASE_URL env var
+ - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+ entrypoint: bash
+ args:
+ - -c
+ - |
+ API_URL=$(gcloud run services describe veriface-api --region us-central1 --format='value(status.url)')
+ echo "Using API URL: $API_URL"
+ gcloud run deploy veriface-ui \
+ --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA \
+ --region us-central1 \
+ --platform managed \
+ --allow-unauthenticated \
+ --service-account veriface-runner@${PROJECT_ID}.iam.gserviceaccount.com \
+ --port 8080 \
+ --set-env-vars API_BASE_URL=$API_URL \
+ --memory 1Gi \
+ --cpu 2
 
-  # Deploy to Cloud Run with API_BASE env var
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      [
-        'run','deploy','veriface-ui',
-        '--image','us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA',
-        '--region','us-central1',
-        '--allow-unauthenticated',
-        '--set-env-vars','API_BASE=https://veriface-api-2r6izsajpa-uc.a.run.app'
-      ]
-
+substitutions:
+ _REGION: us-central1
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$SHORT_SHA'
+ - us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-ui:$COMMIT_SHA
