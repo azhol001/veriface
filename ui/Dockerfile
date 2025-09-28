@@ -1,20 +1,24 @@
-FROM python:3.12-slim
+# veriface/ui/Dockerfile
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    STREAMLIT_SERVER_PORT=8080 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_SERVER_HEADLESS=true
 
 WORKDIR /app
 
-# minimal deps for streamlit + requests
-RUN pip install --no-cache-dir streamlit==1.37.* requests==2.*
+# Install deps first for caching
+COPY ui/requirements.txt .
+RUN pip install -r requirements.txt
 
-# copy just the UI code
-COPY streamlit_app.py /app/ui/streamlit_app.py
+# Copy app code
+COPY ui /app/ui
 
-# Cloud Run listens on $PORT; Streamlit must bind to 0.0.0.0 and that port
-ENV PORT=8080
-ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-
-# Default API_BASE; will override at deploy
-ENV API_BASE="http://127.0.0.1:8080"
-
+# Port for Cloud Run
 EXPOSE 8080
 
-CMD ["streamlit", "run", "/app/ui/streamlit_app.py", "--server.port=8080", "--server.address=0.0.0.0"]
+# Streamlit entrypoint (Cloud Run will set $PORT=8080; we pin to 8080)
+CMD ["streamlit", "run", "ui/streamlit_app.py", "--server.port=8080", "--server.address=0.0.0.0"]
