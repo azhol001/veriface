@@ -1,4 +1,3 @@
-# Builds API container, pushes to Artifact Registry, deploys to Cloud Run
 steps:
 - name: gcr.io/cloud-builders/docker
   args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA", "-f", "api/Dockerfile", "."]
@@ -20,3 +19,5 @@ steps:
       --cpu 2
 images:
 - us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
+options:
+  logging: CLOUD_LOGGING_ONLY
