@@ -1,1 +1,5 @@
+import streamlit as st
+st.set_page_config(page_title="About • VeriFace")
+st.title("About VeriFace")
+st.write("Coming soon. Explain your mission, team (Adil & Aykhan), and how detectors work.")
 
