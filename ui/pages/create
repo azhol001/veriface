@@ -84,9 +84,9 @@ with right:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("### Contact Information")
     st.markdown("""
-<div class='info-item'><div class='icon'>📧</div><div>info@veriface.ai</div></div>
+<div class='info-item'><div class='icon'>📧</div><div>aykhan@fiu.edu</div></div>
 <div class='info-item'><div class='icon'>📞</div><div>+1 (234) 567-890</div></div>
-<div class='info-item'><div class='icon'>📍</div><div>1234 Elm Street, Suite 567<br/>Anytown, USA</div></div>
+<div class='info-item'><div class='icon'>📍</div><div>FIU UA 233<br/>Anytown, USA</div></div>
 <br/>
 <div class='muted'>Follow us</div>
 """, unsafe_allow_html=True)
