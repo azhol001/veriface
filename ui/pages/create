@@ -1,5 +1,4 @@
 import streamlit as st
-st.set_page_config(page_title="Privacy • VeriFace")
-st.title("Privacy Policy")
-st.write("Coming soon. For the hack demo, files are processed locally and not stored.")
-
+st.set_page_config(page_title="Contact • VeriFace")
+st.title("Contact")
+st.write("Email: DECOY-team@veriface.dev\n\nGitHub: https://github.com/azhol001/veriface")
