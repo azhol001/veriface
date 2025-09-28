@@ -1,1 +1,5 @@
+import streamlit as st
+st.set_page_config(page_title="FAQ • VeriFace")
+st.title("FAQ")
+st.write("Coming soon. Add short answers — formats supported, privacy, known limitations, etc.")
 
