@@ -1,15 +1,15 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  args: ["build", "-t", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA", "-f", "api/Dockerfile", "."]
+  args: ["build","-t","us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$BUILD_ID","-f","api/Dockerfile","."]
 - name: gcr.io/cloud-builders/docker
-  args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA"]
+  args: ["push","us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$BUILD_ID"]
 - name: gcr.io/google.com/cloudsdktool/cloud-sdk
   entrypoint: bash
   args:
   - -c
   - |
     gcloud run deploy veriface-api \
-      --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA \
+      --image us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$BUILD_ID \
       --region us-central1 \
       --platform managed \
       --allow-unauthenticated \
@@ -19,6 +19,6 @@ steps:
       --cpu 2 \
       --timeout=900
 images:
-- us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$COMMIT_SHA
+- us-central1-docker.pkg.dev/$PROJECT_ID/veriface/veriface-api:$BUILD_ID
 options:
   logging: CLOUD_LOGGING_ONLY
