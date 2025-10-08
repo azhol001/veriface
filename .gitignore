@@ -1,0 +1,5 @@
+/Dockerfile
+/Dockerfile.api
+/test.wav
+*.mp4
+*.wav

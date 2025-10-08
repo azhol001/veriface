@@ -116,10 +116,10 @@ def verdict_style(verdict: str) -> str:
     return "warn"
 
 # ================= Upload & Analyze =================
-st.markdown("#### Upload video/audio *(mp4/mov/mkv/webm/wav/mp3)*")
+st.markdown("#### Upload video *(mp4/mov/mkv/webm)*")
 up_col1, up_col2 = st.columns([1.6, .4])
 with up_col1:
-    uploaded = st.file_uploader("Drag & drop or browse", type=["mp4","mov","mkv","webm","wav","mp3"])
+    uploaded = st.file_uploader("Drag & drop or browse", type=["mp4","mov","mkv","webm"])
 with up_col2:
     st.markdown("<div class='btn-primary'>", unsafe_allow_html=True)
     go = st.button("Analyze", type="primary", use_container_width=True)
@@ -143,12 +143,14 @@ if uploaded and go:
         took = time.time() - t0
 
         data = r.json() if r and r.headers.get("content-type","").startswith("application/json") else {}
+        payload = data.get("result", data)  # <-- unwrap API payload
+
         st.success(f"Done in {took:.1f}s")
 
         # ---- Extract backend fields (robust defaults) ----
-        s = data.get("summary", {}) or {}
-        timeline = data.get("timeline", []) or []
-        pa = data.get("per_agent", {}) or {}
+        s = payload.get("summary", {}) or {}
+        timeline = payload.get("timeline", []) or []
+        pa = payload.get("per_agent", {}) or {}
 
         clip_len = s.get("clip_seconds", 0.0)
         sources_flagged = s.get("sources_flagged", []) or []

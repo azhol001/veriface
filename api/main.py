@@ -56,7 +56,7 @@ log = logging.getLogger("veriface.api")
 # -----------------------------------------------------------------------------
 # Utils
 # -----------------------------------------------------------------------------
-SAFE_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".wav", ".mp3"}
+SAFE_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 
 def _sanitize_filename(name: str) -> str:
     # Drop any path components and keep a simple filename
